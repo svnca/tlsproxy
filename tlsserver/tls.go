@@ -18,26 +18,71 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/docker/go-units"
 )
 
 func main() {
-	http.HandleFunc("/", handle)
-	http.HandleFunc("/dl", limitWithStats(5*GiB, dl))
-	http.HandleFunc("/dlz", dlz)
 	var wg sync.WaitGroup
-	wg.Add(1)
+	srv := newServer()
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		http.ListenAndServe("0.0.0.0:33333", nil)
+		err := http.ListenAndServe("0.0.0.0:33333", srv)
+		if err != nil {
+			log.Fatalf("failed to serve: %v", err)
+		}
 	}()
-	http.ListenAndServeTLS("0.0.0.0:33433", "server.crt", "server.key", nil)
+	go func() {
+		err := http.ListenAndServeTLS("0.0.0.0:33433", "server.crt", "server.key", srv)
+		if err != nil {
+			log.Fatalf("failed to serve: %v", err)
+		}
+	}()
+	tick := time.Tick(1 * time.Second)
+	var prev uint64
+	for range tick {
+		b := srv.nsent.Load()
+		fmt.Printf("                                          \r")
+		fmt.Printf("bandwidth: %v\t%s/s\r", bytes(b), bitsSize((b-prev)*ToBits))
+		prev = b
+	}
 	wg.Wait()
 }
 
-func handle(w http.ResponseWriter, r *http.Request) {
+func newServer() *server {
+	srv := &server{}
+	srv.routes()
+	return srv
+}
+
+type server struct {
+	// Total number bytes sent to the clients
+	nsent atomic.Uint64
+
+	mux http.ServeMux
+}
+
+func (s *server) routes() {
+	s.mux.HandleFunc("/", s.handle)
+	s.mux.HandleFunc("/dl", stats(&s.nsent, s.dl))
+	s.mux.HandleFunc("/dls", limitWithStats(&s.nsent, 5*GiB, s.dls))
+	s.mux.HandleFunc("/dlsr", limitRandBetweenStats(&s.nsent, 3*GiB, 20*GiB, s.dls))
+	s.mux.HandleFunc("/dlz", s.dlz)
+}
+
+func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mux.ServeHTTP(w, r)
+}
+
+func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprintf(w, "Hello TLS server!\n")
 }
@@ -47,7 +92,7 @@ var (
 	zeroOctetsShort [2 << 19]byte
 )
 
-func dl(w http.ResponseWriter, r *http.Request) {
+func (s *server) dl(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	for {
 		_, err := w.Write(zeroOctets[:])
@@ -57,7 +102,18 @@ func dl(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func dlz(w http.ResponseWriter, r *http.Request) {
+// short running conn
+func (s *server) dls(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/octet-stream")
+	for {
+		_, err := w.Write(zeroOctetsShort[:])
+		if err != nil {
+			break
+		}
+	}
+}
+
+func (s *server) dlz(w http.ResponseWriter, r *http.Request) {
 	f, err := os.Open("/dev/zero")
 	if err != nil {
 		return
@@ -70,10 +126,12 @@ func dlz(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type bytes int64
+
 // Common size suffixes
 const (
-	B   = 1
-	KiB = 1 << (10 * iota)
+	B   bytes = 1
+	KiB bytes = 1 << (10 * iota)
 	MiB
 	GiB
 	TiB
@@ -81,14 +139,20 @@ const (
 	EiB
 )
 
+func (b bytes) String() string {
+	return units.BytesSize(float64(b))
+}
+
 type statResponseWriter struct {
 	http.ResponseWriter
 	nbytes int64
+	stat   *atomic.Uint64
 }
 
 func (s *statResponseWriter) Write(p []byte) (n int, err error) {
 	n, err = s.ResponseWriter.Write(p)
 	s.nbytes += int64(n)
+	s.stat.Add(uint64(n))
 	return n, err
 }
 
@@ -109,24 +173,45 @@ func (l *limitedResponseWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-func limit(nbytes int64, h http.HandlerFunc) http.HandlerFunc {
+func limit(nbytes bytes, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		lw := &limitedResponseWriter{
 			ResponseWriter: w,
-			n:              nbytes,
+			n:              int64(nbytes),
 		}
 		h(lw, r)
 	}
 }
 
-func stats(h http.HandlerFunc) http.HandlerFunc {
+func limitRandBetween(from, to bytes, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h(&statResponseWriter{ResponseWriter: w}, r)
+		nn := rand.Intn(int(to-from)+1) + int(from)
+		fmt.Printf("\nwill serve %s\n", bytes(nn))
+		lw := &limitedResponseWriter{
+			ResponseWriter: w,
+			n:              int64(nn),
+		}
+		h(lw, r)
 	}
 }
 
-func limitWithStats(nbytes int64, h http.HandlerFunc) http.HandlerFunc {
+func limitRandBetweenStats(
+	stat *atomic.Uint64,
+	from, to bytes,
+	h http.HandlerFunc,
+) http.HandlerFunc {
+	sw := stats(stat, h)
+	return limitRandBetween(from, to, sw)
+}
+
+func stats(stat *atomic.Uint64, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		h(&statResponseWriter{ResponseWriter: w, stat: stat}, r)
+	}
+}
+
+func limitWithStats(stat *atomic.Uint64, nbytes bytes, h http.HandlerFunc) http.HandlerFunc {
 	lw := limit(nbytes, h)
-	sw := stats(lw)
+	sw := stats(stat, lw)
 	return sw
 }
