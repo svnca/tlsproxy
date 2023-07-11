@@ -33,6 +33,8 @@ var (
 const (
 	dlPath    = "dl"
 	shortPath = "dlsr"
+
+	maxErrors = 10
 )
 
 func main() {
@@ -46,25 +48,25 @@ func main() {
 		log.Fatalf("failed to join url: %v", err)
 	}
 	semC := make(chan struct{}, *nConns+*nShortLived)
+	var numErrors int
 	var wg sync.WaitGroup
-	defer wg.Wait()
 	wg.Add(*nConns)
-	for i := 0; i < *nConns; i++ {
+	for i := 0; i < *nConns && numErrors < maxErrors; i++ {
 		semC <- struct{}{}
 		go func() {
 			defer func() {
 				wg.Done()
 				<-semC
-				fmt.Println("long conn finished")
 			}()
 			err := dl(dst)
 			if err != nil {
 				fmt.Printf("download failed: %v\n", err)
+				numErrors++
 			}
 		}()
 	}
-	wg.Add(*nShortLived)
-	for {
+	for numErrors < maxErrors {
+		wg.Add(1)
 		semC <- struct{}{}
 		go func() {
 			defer func() {
@@ -74,7 +76,9 @@ func main() {
 			err := dl(shortDst)
 			if err != nil {
 				fmt.Printf("download failed: %v\n", err)
+				numErrors++
 			}
 		}()
 	}
+	wg.Wait()
 }
