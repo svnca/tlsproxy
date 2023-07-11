@@ -16,6 +16,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -29,7 +30,12 @@ import (
 	"github.com/docker/go-units"
 )
 
+var (
+	verbose = flag.Bool("v", false, "verbose output")
+)
+
 func main() {
+	flag.Parse()
 	var wg sync.WaitGroup
 	srv := newServer()
 	wg.Add(2)
@@ -186,7 +192,9 @@ func limit(nbytes bytes, h http.HandlerFunc) http.HandlerFunc {
 func limitRandBetween(from, to bytes, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nn := rand.Intn(int(to-from)+1) + int(from)
-		fmt.Printf("\nwill serve %s\n", bytes(nn))
+		if *verbose {
+			fmt.Printf("\nwill serve %s\n", bytes(nn))
+		}
 		lw := &limitedResponseWriter{
 			ResponseWriter: w,
 			n:              int64(nn),
