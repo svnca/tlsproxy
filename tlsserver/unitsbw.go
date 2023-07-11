@@ -4,29 +4,29 @@ import (
 	"fmt"
 )
 
-type bitsSize int64
+type bitRate int64
 
 const (
-	bits  bitsSize = 1
-	Kbits          = 1000 * bits
-	Mbits          = 1000 * Kbits
-	Gbits          = 1000 * Mbits
-	Tbits          = 1000 * Gbits
+	Bits  bitRate = 1
+	Kbits         = 1000 * Bits
+	Mbits         = 1000 * Kbits
+	Gbits         = 1000 * Mbits
+	Tbits         = 1000 * Gbits
 
 	ToBits = 8
 )
 
-func (b bitsSize) String() string {
-	return bitsSizeStr(float64(b))
+func (b bitRate) String() string {
+	return bitrateStr(float64(b))
 }
 
 var (
 	bitspsAbbrs = []string{"bits", "Kbits", "Mbits", "Gbits", "Tbits"}
 )
 
-// bitsSize returns a human-readable size in bits, kbits,
+// bitrateStr returns a human-readable size in bits, kbits,
 // megabits, gigabits (eg. "44Kbits", "17Mbits").
-func bitsSizeStr(size float64) string {
+func bitrateStr(size float64) string {
 	return customSize("%.4g%s", size, 1000.0, bitspsAbbrs)
 }
 

@@ -57,7 +57,7 @@ func main() {
 	for range tick {
 		b := srv.nsent.Load()
 		fmt.Printf("                                          \r")
-		fmt.Printf("bandwidth: %v\t%s/s\r", bytes(b), bitsSize((b-prev)*ToBits))
+		fmt.Printf("bandwidth: %v\t%s/s\r", bytes(b), bitRate((b-prev)*ToBits))
 		prev = b
 	}
 	wg.Wait()

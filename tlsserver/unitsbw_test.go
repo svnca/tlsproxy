@@ -2,13 +2,12 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"testing"
 )
 
 func TestBitsSize(t *testing.T) {
 	tests := []struct {
-		bps  bitsSize
+		bps  bitRate
 		want string
 	}{
 		{4 * Mbits, "4Mbits"},
