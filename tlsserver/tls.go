@@ -53,13 +53,29 @@ func main() {
 		}
 	}()
 	tick := time.Tick(1 * time.Second)
-	var prev uint64
+	var (
+		prev      uint64
+		avg       uint64
+		nsample   int
+		prevTotal uint64
+	)
 	for range tick {
 		b := srv.nsent.Load()
+		if b-prev > 10000 {
+			if prevTotal == 0 {
+				prevTotal = b
+			}
+			nsample++
+			avg = (b - prevTotal) / uint64(nsample)
+		} else {
+			prevTotal = 0
+			nsample = 0
+		}
 		fmt.Printf("                                                          \r")
 		fmt.Printf(
-			"Transfer: %-12s  Rate: %12s/s %12s/s\r",
+			"Transfer: %-12s Avg: %-12s Rate: %12s/s %12s/s\r",
 			bytes(b),
+			bitRate(avg*ToBits),
 			bytes(b-prev),
 			bitRate((b-prev)*ToBits),
 		)
